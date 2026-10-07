@@ -1,0 +1,195 @@
+<style>
+  :host {
+    display: block;
+  }
+  .otpc-wrap {
+    font-family: var(--font-family-base, inherit);
+    border: 1px solid var(--color-border-default, #E2E5EA);
+    border-radius: var(--radius-md, 8px);
+    padding: 16px;
+    background: var(--color-surface-default, #FFFFFF);
+    box-sizing: border-box;
+  }
+  .otpc-title {
+    margin: 0 0 12px 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-default, #1A1A2E);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .otpc-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .otpc-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--color-surface-secondary, #F3F4F8);
+    color: var(--color-action-primary-default, #5B4FE5);
+    text-decoration: none;
+    line-height: 1.2;
+    border: 1px solid transparent;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .otpc-tag:hover {
+    background: var(--color-surface-tertiary, #E9E9F7);
+    border-color: var(--color-action-primary-default, #5B4FE5);
+  }
+  .otpc-count {
+    font-size: 0.8em;
+    opacity: 0.65;
+  }
+  .otpc-size-1 { font-size: 12px; }
+  .otpc-size-2 { font-size: 14px; }
+  .otpc-size-3 { font-size: 16px; font-weight: 600; }
+  .otpc-size-4 { font-size: 19px; font-weight: 700; }
+  .otpc-empty {
+    font-size: 13px;
+    color: var(--color-text-subtle, #6B7280);
+    font-style: italic;
+  }
+</style>
+
+<div class="otpc-wrap">
+  <p class="otpc-title" id="otpc-title">Tags on this page</p>
+  <div class="otpc-cloud" id="otpc-cloud">
+    <span class="otpc-empty">Loading tags&hellip;</span>
+  </div>
+</div>
+
+<script type="module">
+  // Tags on This Page widget
+  //
+  // Works on ANY page it's dropped onto. It does not call any API or
+  // hardcode a category - it reads the tag links the community itself
+  // already renders on the current page (topic lists, topic detail
+  // pages, knowledge base articles, anywhere) and rolls them up into a
+  // tag cloud, deduplicated and sized by how often each tag appears.
+  //
+  // How it finds tags: every tag in this community renders as a link to
+  // the search page in the form /search?q=<tag>&search_type=tag. That
+  // pattern was confirmed by inspecting rendered tag links on this
+  // platform. If a future platform update changes that URL pattern,
+  // update TAG_LINK_SELECTOR below to match the new markup.
+
+  const TAG_LINK_SELECTOR = 'a[href*="search_type=tag"]';
+
+  export default async function init(sdk) {
+    await sdk.whenReady();
+
+    const titleEl = sdk.$('#otpc-title');
+    const cloudEl = sdk.$('#otpc-cloud');
+
+    let lastSignature = '';
+    let debounceHandle = null;
+
+    function getConfig() {
+      const props = sdk.getProps() || {};
+      return {
+        title: props.title || 'Tags on this page',
+        maxTags: Number(props.maxTags) > 0 ? Number(props.maxTags) : 30,
+        showCounts: props.showCounts !== false
+      };
+    }
+
+    function collectTags() {
+      // `document` here is the HOST PAGE document. Only this widget's
+      // OWN markup lives in a shadow root - the widget's script runs in
+      // the page's normal JS context, so a plain document query still
+      // reaches every tag link already rendered anywhere on the page,
+      // including ones outside this widget.
+      const anchors = document.querySelectorAll(TAG_LINK_SELECTOR);
+      const byLabel = new Map();
+
+      anchors.forEach((a) => {
+        const label = (a.textContent || '').trim();
+        if (!label) return;
+        const key = label.toLowerCase();
+        const href = a.getAttribute('href') || '';
+        const existing = byLabel.get(key);
+        if (existing) {
+          existing.count += 1;
+        } else {
+          byLabel.set(key, { label, href, count: 1 });
+        }
+      });
+
+      return Array.from(byLabel.values()).sort((a, b) => b.count - a.count);
+    }
+
+    function render() {
+      const config = getConfig();
+      if (titleEl) titleEl.textContent = config.title;
+
+      const tags = collectTags().slice(0, config.maxTags);
+      const signature = config.showCounts + '|' + JSON.stringify(tags.map((t) => [t.label, t.count]));
+      if (signature === lastSignature) return;
+      lastSignature = signature;
+
+      if (!cloudEl) return;
+      cloudEl.innerHTML = '';
+
+      if (tags.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'otpc-empty';
+        empty.textContent = 'No tags found on this page yet.';
+        cloudEl.appendChild(empty);
+        return;
+      }
+
+      const maxCount = tags[0].count;
+
+      tags.forEach((tag) => {
+        const ratio = maxCount > 0 ? tag.count / maxCount : 0;
+        const sizeTier = ratio > 0.75 ? 4 : ratio > 0.5 ? 3 : ratio > 0.25 ? 2 : 1;
+
+        const link = document.createElement('a');
+        link.className = 'otpc-tag otpc-size-' + sizeTier;
+        link.href = tag.href || ('/search?q=' + encodeURIComponent(tag.label) + '&search_type=tag');
+        link.textContent = tag.label;
+
+        if (config.showCounts) {
+          const countEl = document.createElement('span');
+          countEl.className = 'otpc-count';
+          countEl.textContent = '(' + tag.count + ')';
+          link.appendChild(countEl);
+        }
+
+        cloudEl.appendChild(link);
+      });
+    }
+
+    function scheduleRender() {
+      if (debounceHandle) clearTimeout(debounceHandle);
+      debounceHandle = setTimeout(render, 250);
+    }
+
+    // Initial render, plus a few delayed retries: the community is a
+    // client-rendered app, so topics (and their tags) can still be
+    // streaming in just after this widget mounts.
+    render();
+    [300, 800, 1500, 3000].forEach((ms) => setTimeout(render, ms));
+
+    // Keep the cloud live as the page changes underneath it -
+    // pagination, infinite scroll, client-side navigation to another
+    // category or topic without a full page reload.
+    const observer = new MutationObserver(scheduleRender);
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    sdk.on('destroy', () => {
+      observer.disconnect();
+      if (debounceHandle) clearTimeout(debounceHandle);
+    });
+
+    sdk.on('propsChanged', () => {
+      lastSignature = ''; // force a re-render even if the tag set is unchanged
+      render();
+    });
+  }
+</script>
