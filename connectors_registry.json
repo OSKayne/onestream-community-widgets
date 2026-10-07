@@ -1,0 +1,28 @@
+{
+  "connectors": [
+    {
+      "name": "Community Search API",
+      "url": "https://api2-us-west-2.insided.com/search",
+      "method": "GET",
+      "headers": [
+        { "key": "Accept", "value": "application/json", "overridable": false }
+      ],
+      "query_parameters": [
+        { "key": "q", "value": "", "overridable": true },
+        { "key": "categoryIds", "value": "", "overridable": true },
+        { "key": "page", "value": "1", "overridable": true },
+        { "key": "pageSize", "value": "200", "overridable": true }
+      ],
+      "authentication": {
+        "type": "oauth_client_credentials",
+        "config": {
+          "client_id": "{{ get_secret('insided_search_client_id') }}",
+          "client_secret": "{{ get_secret('insided_search_client_secret') }}",
+          "token_url": "https://api2-us-west-2.insided.com/oauth2/token",
+          "scope": "read"
+        }
+      },
+      "permalink": "insided-search-api"
+    }
+  ]
+}
