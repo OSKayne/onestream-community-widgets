@@ -11,12 +11,17 @@
     box-sizing: border-box;
   }
   .otpc-title {
-    margin: 0 0 12px 0;
+    margin: 0 0 4px 0;
     font-size: 14px;
     font-weight: 600;
     color: var(--color-text-default, #1A1A2E);
     text-transform: uppercase;
     letter-spacing: 0.03em;
+  }
+  .otpc-subtitle {
+    margin: 0 0 12px 0;
+    font-size: 11px;
+    color: var(--color-text-subtle, #6B7280);
   }
   .otpc-cloud {
     display: flex;
@@ -64,6 +69,7 @@
 
 <div class="otpc-wrap">
   <p class="otpc-title" id="otpc-title">Tags on this page</p>
+  <p class="otpc-subtitle" id="otpc-subtitle" style="display:none"></p>
   <div class="otpc-cloud" id="otpc-cloud">
     <span class="otpc-empty">Loading tags&hellip;</span>
   </div>
@@ -71,57 +77,70 @@
 </div>
 
 <script type="module">
-  // Tags on This Page widget (v1.2)
+  // Tags widget (v1.3)
   //
-  // Works on ANY page it's dropped onto - feeds/category listings AND
-  // individual topic/article pages - with no hardcoded category or
-  // content type.
+  // Primary mode - SPACE-WIDE via the Community Search API (preferred):
+  // If the current page's URL identifies a category/space (this
+  // platform's URLs end each category/space segment in "-<numeric id>",
+  // e.g. /news-3), the widget calls the "Community Search API" Connector
+  // with that categoryIds filter and aggregates the `tags` field already
+  // present on every result. This covers every topic in the space, not
+  // just what's currently loaded on screen, in one or two API calls -
+  // no per-topic fetching needed. Requires the "insided-search-api"
+  // Connector to be configured (see connectors_registry.json) and the
+  // Search API to be enabled for this community by Gainsight.
   //
-  // Tags only render in this community's markup on the INDIVIDUAL
-  // topic/article page itself (as <a href="/search?q=X&search_type=tag"
-  // class="tag--pill ...">X</a> links) - never on feed/listing cards.
-  // So the widget does two things:
+  // Fallback mode - THIS PAGE ONLY, via DOM reading/crawling:
+  // If no category can be identified from the URL, or the Connector call
+  // fails (not yet configured, access not granted, etc.), the widget
+  // falls back to reading tags straight from the page's own markup, plus
+  // following article links already on the page to pick up tags that
+  // only render on those articles' own pages (feed/listing pages don't
+  // show tags per card here). This mode is capped (maxItemsToScan) and
+  // additive across re-scans - see mentionsBySource below.
   //
-  //   1. Reads tag links already present in the CURRENT page's DOM
-  //      (covers the case where it's placed directly on a topic page).
-  //   2. Finds links on the current page that point to OTHER individual
-  //      content items (covers the case where it's placed on a feed/
-  //      listing page) and fetches each of those pages in the
-  //      background to read off their tags, the same way a browser
-  //      would if you'd clicked through.
-  //
-  // Content-item URLs on this platform end in "-<numeric id>" (e.g.
-  // /news-3/some-article-slug-8814). Nav/header mega-menus use the same
-  // "-<id>" convention for category links, so those regions are
-  // excluded explicitly rather than relying on the URL pattern alone.
-  //
-  // State is kept PER SOURCE (the current page, plus each article URL
-  // already fetched) and only ever grows. The page re-scans itself
-  // constantly (React re-renders, infinite scroll, live counters), and
-  // this widget must not treat "I don't see this source's link right
-  // now" as "forget its tags" - otherwise the cloud flickers back to
-  // empty on every re-render and gets worse as more posts load in.
+  // Tag links: this platform's tag search URL format is confirmed as
+  // /search?tags[0]=<tag name> (bracket array syntax). Scraped tag links
+  // already carry a real, working href and are used as-is; tags that
+  // come from the API (no DOM element to read a href from) get a link
+  // built in that same format.
 
-  const TAG_LINK_SELECTOR = 'a[href*="search_type=tag"]';
+  const TAG_LINK_SELECTOR = 'a[href*="search_type=tag"], a[href*="tags%5B0%5D"], a[href*="tags[0]"]';
   const CONTENT_LINK_RE = /-\d+\/?$/;
   const EXCLUDED_PATH_RE = /^\/(members|search|topic|activity|login|ssoproxy|site|p|groups)(\/|$)/i;
   const NAV_EXCLUDE_SELECTOR = 'nav, header, [role="navigation"], [role="banner"], [role="menu"]';
   const CURRENT_PAGE_KEY = '::current-page::';
+  const CONNECTOR_PERMALINK = 'insided-search-api';
+  const SEARCH_API_PAGE_SIZE = 200;
+  const SEARCH_API_MAX_PAGES = 10; // safety cap: up to 2000 topics in a space
+
+  function buildTagHref(label) {
+    return '/search?' + encodeURIComponent('tags[0]') + '=' + encodeURIComponent(label);
+  }
+
+  function extractCategoryIdFromPath() {
+    const firstSegment = window.location.pathname.split('/').filter(Boolean)[0] || '';
+    const m = firstSegment.match(/-(\d+)$/);
+    return m ? parseInt(m[1], 10) : null;
+  }
 
   export default async function init(sdk) {
     await sdk.whenReady();
 
     const titleEl = sdk.$('#otpc-title');
+    const subtitleEl = sdk.$('#otpc-subtitle');
     const cloudEl = sdk.$('#otpc-cloud');
     const scanningEl = sdk.$('#otpc-scanning');
 
     let lastSignature = '';
     let debounceHandle = null;
     let crawlInFlight = false;
+    let mode = null; // 'space' | 'page'
+    let spaceFetchAttempted = false;
 
-    // Persistent, additive state: one entry per source (current page,
-    // or a fetched article URL). Re-scans only ever add new sources or
-    // refresh the current-page entry - nothing is ever cleared.
+    // Persistent, additive state for fallback (page) mode: one entry per
+    // source (current page, or a fetched article URL). Re-scans only
+    // ever add new sources or refresh the current-page entry.
     const mentionsBySource = new Map();
     const triedUrls = new Set();
 
@@ -146,6 +165,40 @@
       return out;
     }
 
+    // ---------- Space-wide mode (Community Search API via Connector) ----------
+
+    async function fetchSpaceTags(categoryId) {
+      const widgetServiceSdk = new window.WidgetServiceSDK();
+      const mentions = [];
+
+      for (let page = 1; page <= SEARCH_API_MAX_PAGES; page++) {
+        const data = await widgetServiceSdk.connectors.execute({
+          permalink: CONNECTOR_PERMALINK,
+          method: 'GET',
+          queryParams: {
+            q: '',
+            categoryIds: [String(categoryId)],
+            page: String(page),
+            pageSize: String(SEARCH_API_PAGE_SIZE)
+          }
+        });
+
+        const results = (data && data.community) || [];
+        results.forEach((item) => {
+          (item.tags || []).forEach((label) => {
+            if (!label) return;
+            mentions.push({ label, href: buildTagHref(label) });
+          });
+        });
+
+        if (results.length < SEARCH_API_PAGE_SIZE) break;
+      }
+
+      return mentions;
+    }
+
+    // ---------- Page mode (fallback: DOM read + same-origin crawl) ----------
+
     function collectContentLinks(limit) {
       const currentPath = window.location.pathname.replace(/\/$/, '');
       const anchors = Array.from(document.querySelectorAll('a[href]'));
@@ -154,9 +207,6 @@
 
       for (const a of anchors) {
         if (links.length >= limit) break;
-        // Skip anything inside nav/header regions - mega-menus and
-        // sidebar category trees also use "-<id>" URLs and would
-        // otherwise swamp the scan before it reaches real articles.
         if (a.closest(NAV_EXCLUDE_SELECTOR)) continue;
         const href = a.getAttribute('href');
         if (!href) continue;
@@ -192,11 +242,7 @@
       }
     }
 
-    function flattenMentions() {
-      const all = [];
-      mentionsBySource.forEach((arr) => { all.push(...arr); });
-      return all;
-    }
+    // ---------- Shared: aggregate + paint ----------
 
     function aggregate(allTagMentions) {
       const byLabel = new Map();
@@ -212,12 +258,23 @@
       return Array.from(byLabel.values()).sort((a, b) => b.count - a.count);
     }
 
-    function paint() {
+    function paint(tagMentions) {
       const config = getConfig();
       if (titleEl) titleEl.textContent = config.title;
+      if (subtitleEl) {
+        if (mode === 'space') {
+          subtitleEl.textContent = 'Across the whole space';
+          subtitleEl.style.display = 'block';
+        } else if (mode === 'page') {
+          subtitleEl.textContent = 'From this page';
+          subtitleEl.style.display = 'block';
+        } else {
+          subtitleEl.style.display = 'none';
+        }
+      }
 
-      const tags = aggregate(flattenMentions()).slice(0, config.maxTags);
-      const signature = config.showCounts + '|' + JSON.stringify(tags.map((t) => [t.label, t.count]));
+      const tags = aggregate(tagMentions).slice(0, config.maxTags);
+      const signature = mode + '|' + config.showCounts + '|' + JSON.stringify(tags.map((t) => [t.label, t.count]));
       if (signature === lastSignature) return;
       lastSignature = signature;
 
@@ -227,7 +284,7 @@
       if (tags.length === 0) {
         const empty = document.createElement('span');
         empty.className = 'otpc-empty';
-        empty.textContent = 'No tags found on this page yet.';
+        empty.textContent = 'No tags found yet.';
         cloudEl.appendChild(empty);
         return;
       }
@@ -239,7 +296,7 @@
 
         const link = document.createElement('a');
         link.className = 'otpc-tag otpc-size-' + sizeTier;
-        link.href = tag.href || ('/search?q=' + encodeURIComponent(tag.label) + '&search_type=tag');
+        link.href = tag.href || buildTagHref(tag.label);
         link.textContent = tag.label;
 
         if (config.showCounts) {
@@ -253,18 +310,23 @@
       });
     }
 
-    async function render() {
-      const config = getConfig();
+    function flattenPageMentions() {
+      const all = [];
+      mentionsBySource.forEach((arr) => { all.push(...arr); });
+      return all;
+    }
 
-      // Refresh the current page's own direct tags (cheap, always
-      // current) and repaint immediately from everything known so far -
-      // this never erases tags found by an earlier crawl pass.
+    // ---------- Page-mode render loop (fallback only) ----------
+
+    async function renderPageMode() {
+      mode = 'page';
       mentionsBySource.set(CURRENT_PAGE_KEY, extractTagsFromDocument(document));
-      paint();
+      paint(flattenPageMentions());
 
       if (crawlInFlight) return;
       crawlInFlight = true;
 
+      const config = getConfig();
       const budgetRemaining = Math.max(0, config.maxItemsToScan - triedUrls.size);
       const links = budgetRemaining > 0
         ? collectContentLinks(triedUrls.size + budgetRemaining).filter((u) => !triedUrls.has(u)).slice(0, budgetRemaining)
@@ -281,11 +343,45 @@
         batch.forEach((u) => triedUrls.add(u));
         const results = await Promise.all(batch.map(fetchTagsForUrl));
         batch.forEach((u, idx) => { mentionsBySource.set(u, results[idx]); });
-        paint();
+        paint(flattenPageMentions());
       }
 
       if (scanningEl) scanningEl.style.display = 'none';
       crawlInFlight = false;
+    }
+
+    // ---------- Top-level render: try space mode once, else page mode ----------
+
+    async function render() {
+      const categoryId = extractCategoryIdFromPath();
+
+      if (categoryId !== null && !spaceFetchAttempted) {
+        spaceFetchAttempted = true;
+        if (scanningEl) {
+          scanningEl.style.display = 'block';
+          scanningEl.textContent = 'Loading tags for this space…';
+        }
+        try {
+          const spaceMentions = await fetchSpaceTags(categoryId);
+          mode = 'space';
+          if (scanningEl) scanningEl.style.display = 'none';
+          paint(spaceMentions);
+          return; // space mode succeeded - no need for page-mode crawling
+        } catch (e) {
+          console.warn('[Tags widget] Space-wide lookup failed, falling back to page mode:', e && e.message);
+          if (scanningEl) scanningEl.style.display = 'none';
+          // fall through to page mode below
+        }
+      }
+
+      if (mode === 'space') {
+        // Space mode already succeeded earlier - nothing more to do on
+        // subsequent re-scans (the space's tag set doesn't change just
+        // because the DOM mutated).
+        return;
+      }
+
+      await renderPageMode();
     }
 
     function scheduleRender() {
@@ -296,9 +392,9 @@
     render();
     [500, 1500].forEach((ms) => setTimeout(scheduleRender, ms));
 
-    // Re-scan (debounced) as the page changes underneath it - pagination,
-    // infinite scroll, client-side navigation between categories/topics.
-    // Each re-scan is additive only (see render()/mentionsBySource above).
+    // Re-scan (debounced) as the page changes underneath it. In space
+    // mode this is a cheap no-op once loaded; in page mode it's how new
+    // "show more" content gets picked up (additive, see mentionsBySource).
     const observer = new MutationObserver(scheduleRender);
     observer.observe(document.body, { childList: true, subtree: true });
 
@@ -309,7 +405,15 @@
 
     sdk.on('propsChanged', () => {
       lastSignature = '';
-      paint();
+      if (mode === 'space') {
+        // nothing cached beyond what's already painted; re-run to apply
+        // new title/maxTags/showCounts against the last known data isn't
+        // stored separately, so just re-trigger a fresh fetch.
+        spaceFetchAttempted = false;
+        render();
+      } else {
+        paint(flattenPageMentions());
+      }
     });
   }
 </script>
