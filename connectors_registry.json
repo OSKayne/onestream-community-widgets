@@ -5,13 +5,33 @@
       "url": "https://api2-us-west-2.insided.com/search",
       "method": "GET",
       "headers": [
-        { "key": "Accept", "value": "application/json", "overridable": false }
+        {
+          "key": "Accept",
+          "value": "application/json",
+          "overridable": false
+        }
       ],
       "query_parameters": [
-        { "key": "q", "value": "", "overridable": true },
-        { "key": "categoryIds", "value": "", "overridable": true },
-        { "key": "page", "value": "1", "overridable": true },
-        { "key": "pageSize", "value": "200", "overridable": true }
+        {
+          "key": "q",
+          "value": " ",
+          "overridable": true
+        },
+        {
+          "key": "categoryIds",
+          "value": "0",
+          "overridable": true
+        },
+        {
+          "key": "page",
+          "value": "1",
+          "overridable": true
+        },
+        {
+          "key": "pageSize",
+          "value": "200",
+          "overridable": true
+        }
       ],
       "authentication": {
         "type": "oauth_client_credentials",
