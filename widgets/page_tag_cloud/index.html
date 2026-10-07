@@ -71,7 +71,7 @@
 </div>
 
 <script type="module">
-  // Tags on This Page widget (v1.1)
+  // Tags on This Page widget (v1.2)
   //
   // Works on ANY page it's dropped onto - feeds/category listings AND
   // individual topic/article pages - with no hardcoded category or
@@ -86,20 +86,27 @@
   //      (covers the case where it's placed directly on a topic page).
   //   2. Finds links on the current page that point to OTHER individual
   //      content items (covers the case where it's placed on a feed/
-  //      listing page, where the cards link out to articles but don't
-  //      show those articles' tags inline) - and quietly fetches each
-  //      of those pages in the background to read off their tags, the
-  //      same way a browser would if you'd clicked through.
+  //      listing page) and fetches each of those pages in the
+  //      background to read off their tags, the same way a browser
+  //      would if you'd clicked through.
   //
   // Content-item URLs on this platform end in "-<numeric id>" (e.g.
-  // /news-3/some-article-slug-8814) - confirmed across dozens of URLs
-  // on this community. That pattern, filtered to exclude member
-  // profile/search/system links, is what identifies "content on this
-  // page" when the page itself is a feed.
+  // /news-3/some-article-slug-8814). Nav/header mega-menus use the same
+  // "-<id>" convention for category links, so those regions are
+  // excluded explicitly rather than relying on the URL pattern alone.
+  //
+  // State is kept PER SOURCE (the current page, plus each article URL
+  // already fetched) and only ever grows. The page re-scans itself
+  // constantly (React re-renders, infinite scroll, live counters), and
+  // this widget must not treat "I don't see this source's link right
+  // now" as "forget its tags" - otherwise the cloud flickers back to
+  // empty on every re-render and gets worse as more posts load in.
 
   const TAG_LINK_SELECTOR = 'a[href*="search_type=tag"]';
   const CONTENT_LINK_RE = /-\d+\/?$/;
   const EXCLUDED_PATH_RE = /^\/(members|search|topic|activity|login|ssoproxy|site|p|groups)(\/|$)/i;
+  const NAV_EXCLUDE_SELECTOR = 'nav, header, [role="navigation"], [role="banner"], [role="menu"]';
+  const CURRENT_PAGE_KEY = '::current-page::';
 
   export default async function init(sdk) {
     await sdk.whenReady();
@@ -111,7 +118,11 @@
     let lastSignature = '';
     let debounceHandle = null;
     let crawlInFlight = false;
-    const fetchedTagsByUrl = new Map(); // cache: content URL -> [{label, href}]
+
+    // Persistent, additive state: one entry per source (current page,
+    // or a fetched article URL). Re-scans only ever add new sources or
+    // refresh the current-page entry - nothing is ever cleared.
+    const mentionsBySource = new Map();
     const triedUrls = new Set();
 
     function getConfig() {
@@ -135,18 +146,18 @@
       return out;
     }
 
-    function collectContentLinks(maxItemsToScan) {
+    function collectContentLinks(limit) {
       const currentPath = window.location.pathname.replace(/\/$/, '');
       const anchors = Array.from(document.querySelectorAll('a[href]'));
       const seen = new Set();
       const links = [];
 
       for (const a of anchors) {
-        if (links.length >= maxItemsToScan) break;
+        if (links.length >= limit) break;
         // Skip anything inside nav/header regions - mega-menus and
         // sidebar category trees also use "-<id>" URLs and would
         // otherwise swamp the scan before it reaches real articles.
-        if (a.closest('nav, header, [role="navigation"], [role="banner"], [role="menu"]')) continue;
+        if (a.closest(NAV_EXCLUDE_SELECTOR)) continue;
         const href = a.getAttribute('href');
         if (!href) continue;
         let url;
@@ -163,29 +174,28 @@
         const key = url.origin + path;
         if (seen.has(key)) continue;
         seen.add(key);
-        links.push(url.origin + path);
+        links.push(key);
       }
 
       return links;
     }
 
     async function fetchTagsForUrl(url) {
-      if (fetchedTagsByUrl.has(url)) return fetchedTagsByUrl.get(url);
       try {
         const res = await fetch(url, { credentials: 'include' });
-        if (!res.ok) {
-          fetchedTagsByUrl.set(url, []);
-          return [];
-        }
+        if (!res.ok) return [];
         const html = await res.text();
         const doc = new DOMParser().parseFromString(html, 'text/html');
-        const tags = extractTagsFromDocument(doc);
-        fetchedTagsByUrl.set(url, tags);
-        return tags;
+        return extractTagsFromDocument(doc);
       } catch (e) {
-        fetchedTagsByUrl.set(url, []);
         return [];
       }
+    }
+
+    function flattenMentions() {
+      const all = [];
+      mentionsBySource.forEach((arr) => { all.push(...arr); });
+      return all;
     }
 
     function aggregate(allTagMentions) {
@@ -202,17 +212,19 @@
       return Array.from(byLabel.values()).sort((a, b) => b.count - a.count);
     }
 
-    function paint(tags, config) {
+    function paint() {
+      const config = getConfig();
       if (titleEl) titleEl.textContent = config.title;
-      const limited = tags.slice(0, config.maxTags);
-      const signature = config.showCounts + '|' + JSON.stringify(limited.map((t) => [t.label, t.count]));
+
+      const tags = aggregate(flattenMentions()).slice(0, config.maxTags);
+      const signature = config.showCounts + '|' + JSON.stringify(tags.map((t) => [t.label, t.count]));
       if (signature === lastSignature) return;
       lastSignature = signature;
 
       if (!cloudEl) return;
       cloudEl.innerHTML = '';
 
-      if (limited.length === 0) {
+      if (tags.length === 0) {
         const empty = document.createElement('span');
         empty.className = 'otpc-empty';
         empty.textContent = 'No tags found on this page yet.';
@@ -220,8 +232,8 @@
         return;
       }
 
-      const maxCount = limited[0].count;
-      limited.forEach((tag) => {
+      const maxCount = tags[0].count;
+      tags.forEach((tag) => {
         const ratio = maxCount > 0 ? tag.count / maxCount : 0;
         const sizeTier = ratio > 0.75 ? 4 : ratio > 0.5 ? 3 : ratio > 0.25 ? 2 : 1;
 
@@ -244,32 +256,32 @@
     async function render() {
       const config = getConfig();
 
-      // Phase 1: tags already rendered directly on this page (instant).
-      const directTags = extractTagsFromDocument(document);
-      paint(aggregate(directTags), config);
+      // Refresh the current page's own direct tags (cheap, always
+      // current) and repaint immediately from everything known so far -
+      // this never erases tags found by an earlier crawl pass.
+      mentionsBySource.set(CURRENT_PAGE_KEY, extractTagsFromDocument(document));
+      paint();
 
-      // Phase 2: content items linked FROM this page (feed cards, related
-      // topics, etc). Fetch each one's tags in the background and merge
-      // them in as they resolve, without blocking the instant paint above.
       if (crawlInFlight) return;
       crawlInFlight = true;
 
-      const links = collectContentLinks(config.maxItemsToScan).filter((u) => !triedUrls.has(u));
-      links.forEach((u) => triedUrls.add(u));
+      const budgetRemaining = Math.max(0, config.maxItemsToScan - triedUrls.size);
+      const links = budgetRemaining > 0
+        ? collectContentLinks(triedUrls.size + budgetRemaining).filter((u) => !triedUrls.has(u)).slice(0, budgetRemaining)
+        : [];
 
       if (links.length > 0 && scanningEl) {
         scanningEl.style.display = 'block';
-        scanningEl.textContent = 'Scanning ' + links.length + ' linked item(s) for tags…';
+        scanningEl.textContent = 'Scanning ' + links.length + ' new linked item(s) for tags…';
       }
 
       const BATCH_SIZE = 6;
-      let allMentions = directTags.slice();
-
       for (let i = 0; i < links.length; i += BATCH_SIZE) {
         const batch = links.slice(i, i + BATCH_SIZE);
+        batch.forEach((u) => triedUrls.add(u));
         const results = await Promise.all(batch.map(fetchTagsForUrl));
-        results.forEach((tags) => { allMentions = allMentions.concat(tags); });
-        paint(aggregate(allMentions), getConfig());
+        batch.forEach((u, idx) => { mentionsBySource.set(u, results[idx]); });
+        paint();
       }
 
       if (scanningEl) scanningEl.style.display = 'none';
@@ -286,6 +298,7 @@
 
     // Re-scan (debounced) as the page changes underneath it - pagination,
     // infinite scroll, client-side navigation between categories/topics.
+    // Each re-scan is additive only (see render()/mentionsBySource above).
     const observer = new MutationObserver(scheduleRender);
     observer.observe(document.body, { childList: true, subtree: true });
 
@@ -296,7 +309,7 @@
 
     sdk.on('propsChanged', () => {
       lastSignature = '';
-      render();
+      paint();
     });
   }
 </script>
