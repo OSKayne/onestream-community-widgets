@@ -54,6 +54,12 @@
     color: var(--color-text-subtle, #6B7280);
     font-style: italic;
   }
+  .otpc-scanning {
+    font-size: 11px;
+    color: var(--color-text-subtle, #6B7280);
+    margin-top: 8px;
+    font-style: italic;
+  }
 </style>
 
 <div class="otpc-wrap">
@@ -61,57 +67,127 @@
   <div class="otpc-cloud" id="otpc-cloud">
     <span class="otpc-empty">Loading tags&hellip;</span>
   </div>
+  <p class="otpc-scanning" id="otpc-scanning" style="display:none"></p>
 </div>
 
 <script type="module">
-  // Tags on This Page widget
+  // Tags on This Page widget (v1.1)
   //
-  // Works on ANY page it's dropped onto. It does not call any API or
-  // hardcode a category - it reads the tag links the community itself
-  // already renders on the current page (topic lists, topic detail
-  // pages, knowledge base articles, anywhere) and rolls them up into a
-  // tag cloud, deduplicated and sized by how often each tag appears.
+  // Works on ANY page it's dropped onto - feeds/category listings AND
+  // individual topic/article pages - with no hardcoded category or
+  // content type.
   //
-  // How it finds tags: every tag in this community renders as a link to
-  // the search page in the form /search?q=<tag>&search_type=tag. That
-  // pattern was confirmed by inspecting rendered tag links on this
-  // platform. If a future platform update changes that URL pattern,
-  // update TAG_LINK_SELECTOR below to match the new markup.
+  // Tags only render in this community's markup on the INDIVIDUAL
+  // topic/article page itself (as <a href="/search?q=X&search_type=tag"
+  // class="tag--pill ...">X</a> links) - never on feed/listing cards.
+  // So the widget does two things:
+  //
+  //   1. Reads tag links already present in the CURRENT page's DOM
+  //      (covers the case where it's placed directly on a topic page).
+  //   2. Finds links on the current page that point to OTHER individual
+  //      content items (covers the case where it's placed on a feed/
+  //      listing page, where the cards link out to articles but don't
+  //      show those articles' tags inline) - and quietly fetches each
+  //      of those pages in the background to read off their tags, the
+  //      same way a browser would if you'd clicked through.
+  //
+  // Content-item URLs on this platform end in "-<numeric id>" (e.g.
+  // /news-3/some-article-slug-8814) - confirmed across dozens of URLs
+  // on this community. That pattern, filtered to exclude member
+  // profile/search/system links, is what identifies "content on this
+  // page" when the page itself is a feed.
 
   const TAG_LINK_SELECTOR = 'a[href*="search_type=tag"]';
+  const CONTENT_LINK_RE = /-\d+\/?$/;
+  const EXCLUDED_PATH_RE = /^\/(members|search|topic|activity|login|ssoproxy|site|p|groups)(\/|$)/i;
 
   export default async function init(sdk) {
     await sdk.whenReady();
 
     const titleEl = sdk.$('#otpc-title');
     const cloudEl = sdk.$('#otpc-cloud');
+    const scanningEl = sdk.$('#otpc-scanning');
 
     let lastSignature = '';
     let debounceHandle = null;
+    let crawlInFlight = false;
+    const fetchedTagsByUrl = new Map(); // cache: content URL -> [{label, href}]
+    const triedUrls = new Set();
 
     function getConfig() {
       const props = sdk.getProps() || {};
       return {
         title: props.title || 'Tags on this page',
         maxTags: Number(props.maxTags) > 0 ? Number(props.maxTags) : 30,
-        showCounts: props.showCounts !== false
+        showCounts: props.showCounts !== false,
+        maxItemsToScan: Number(props.maxItemsToScan) > 0 ? Number(props.maxItemsToScan) : 40
       };
     }
 
-    function collectTags() {
-      // `document` here is the HOST PAGE document. Only this widget's
-      // OWN markup lives in a shadow root - the widget's script runs in
-      // the page's normal JS context, so a plain document query still
-      // reaches every tag link already rendered anywhere on the page,
-      // including ones outside this widget.
-      const anchors = document.querySelectorAll(TAG_LINK_SELECTOR);
-      const byLabel = new Map();
-
+    function extractTagsFromDocument(doc) {
+      const anchors = doc.querySelectorAll(TAG_LINK_SELECTOR);
+      const out = [];
       anchors.forEach((a) => {
         const label = (a.textContent || '').trim();
         if (!label) return;
+        out.push({ label, href: a.getAttribute('href') || '' });
+      });
+      return out;
+    }
+
+    function collectContentLinks(maxItemsToScan) {
+      const currentPath = window.location.pathname.replace(/\/$/, '');
+      const anchors = Array.from(document.querySelectorAll('a[href]'));
+      const seen = new Set();
+      const links = [];
+
+      for (const a of anchors) {
+        if (links.length >= maxItemsToScan) break;
+        const href = a.getAttribute('href');
+        if (!href) continue;
+        let url;
+        try {
+          url = new URL(href, window.location.origin);
+        } catch (e) {
+          continue;
+        }
+        if (url.origin !== window.location.origin) continue;
+        const path = url.pathname.replace(/\/$/, '');
+        if (!path || path === currentPath) continue;
+        if (EXCLUDED_PATH_RE.test(path)) continue;
+        if (!CONTENT_LINK_RE.test(path)) continue;
+        const key = url.origin + path;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        links.push(url.origin + path);
+      }
+
+      return links;
+    }
+
+    async function fetchTagsForUrl(url) {
+      if (fetchedTagsByUrl.has(url)) return fetchedTagsByUrl.get(url);
+      try {
+        const res = await fetch(url, { credentials: 'include' });
+        if (!res.ok) {
+          fetchedTagsByUrl.set(url, []);
+          return [];
+        }
+        const html = await res.text();
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const tags = extractTagsFromDocument(doc);
+        fetchedTagsByUrl.set(url, tags);
+        return tags;
+      } catch (e) {
+        fetchedTagsByUrl.set(url, []);
+        return [];
+      }
+    }
+
+    function aggregate(allTagMentions) {
+      const byLabel = new Map();
+      allTagMentions.forEach(({ label, href }) => {
         const key = label.toLowerCase();
-        const href = a.getAttribute('href') || '';
         const existing = byLabel.get(key);
         if (existing) {
           existing.count += 1;
@@ -119,23 +195,20 @@
           byLabel.set(key, { label, href, count: 1 });
         }
       });
-
       return Array.from(byLabel.values()).sort((a, b) => b.count - a.count);
     }
 
-    function render() {
-      const config = getConfig();
+    function paint(tags, config) {
       if (titleEl) titleEl.textContent = config.title;
-
-      const tags = collectTags().slice(0, config.maxTags);
-      const signature = config.showCounts + '|' + JSON.stringify(tags.map((t) => [t.label, t.count]));
+      const limited = tags.slice(0, config.maxTags);
+      const signature = config.showCounts + '|' + JSON.stringify(limited.map((t) => [t.label, t.count]));
       if (signature === lastSignature) return;
       lastSignature = signature;
 
       if (!cloudEl) return;
       cloudEl.innerHTML = '';
 
-      if (tags.length === 0) {
+      if (limited.length === 0) {
         const empty = document.createElement('span');
         empty.className = 'otpc-empty';
         empty.textContent = 'No tags found on this page yet.';
@@ -143,9 +216,8 @@
         return;
       }
 
-      const maxCount = tags[0].count;
-
-      tags.forEach((tag) => {
+      const maxCount = limited[0].count;
+      limited.forEach((tag) => {
         const ratio = maxCount > 0 ? tag.count / maxCount : 0;
         const sizeTier = ratio > 0.75 ? 4 : ratio > 0.5 ? 3 : ratio > 0.25 ? 2 : 1;
 
@@ -165,20 +237,51 @@
       });
     }
 
-    function scheduleRender() {
-      if (debounceHandle) clearTimeout(debounceHandle);
-      debounceHandle = setTimeout(render, 250);
+    async function render() {
+      const config = getConfig();
+
+      // Phase 1: tags already rendered directly on this page (instant).
+      const directTags = extractTagsFromDocument(document);
+      paint(aggregate(directTags), config);
+
+      // Phase 2: content items linked FROM this page (feed cards, related
+      // topics, etc). Fetch each one's tags in the background and merge
+      // them in as they resolve, without blocking the instant paint above.
+      if (crawlInFlight) return;
+      crawlInFlight = true;
+
+      const links = collectContentLinks(config.maxItemsToScan).filter((u) => !triedUrls.has(u));
+      links.forEach((u) => triedUrls.add(u));
+
+      if (links.length > 0 && scanningEl) {
+        scanningEl.style.display = 'block';
+        scanningEl.textContent = 'Scanning ' + links.length + ' linked item(s) for tags…';
+      }
+
+      const BATCH_SIZE = 6;
+      let allMentions = directTags.slice();
+
+      for (let i = 0; i < links.length; i += BATCH_SIZE) {
+        const batch = links.slice(i, i + BATCH_SIZE);
+        const results = await Promise.all(batch.map(fetchTagsForUrl));
+        results.forEach((tags) => { allMentions = allMentions.concat(tags); });
+        paint(aggregate(allMentions), getConfig());
+      }
+
+      if (scanningEl) scanningEl.style.display = 'none';
+      crawlInFlight = false;
     }
 
-    // Initial render, plus a few delayed retries: the community is a
-    // client-rendered app, so topics (and their tags) can still be
-    // streaming in just after this widget mounts.
-    render();
-    [300, 800, 1500, 3000].forEach((ms) => setTimeout(render, ms));
+    function scheduleRender() {
+      if (debounceHandle) clearTimeout(debounceHandle);
+      debounceHandle = setTimeout(render, 400);
+    }
 
-    // Keep the cloud live as the page changes underneath it -
-    // pagination, infinite scroll, client-side navigation to another
-    // category or topic without a full page reload.
+    render();
+    [500, 1500].forEach((ms) => setTimeout(scheduleRender, ms));
+
+    // Re-scan (debounced) as the page changes underneath it - pagination,
+    // infinite scroll, client-side navigation between categories/topics.
     const observer = new MutationObserver(scheduleRender);
     observer.observe(document.body, { childList: true, subtree: true });
 
@@ -188,7 +291,7 @@
     });
 
     sdk.on('propsChanged', () => {
-      lastSignature = ''; // force a re-render even if the tag set is unchanged
+      lastSignature = '';
       render();
     });
   }
