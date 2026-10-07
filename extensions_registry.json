@@ -1,0 +1,59 @@
+{
+  "widgets": [
+    {
+      "title": "Tags on This Page",
+      "type": "onestream_page_tag_cloud",
+      "category": "content discovery",
+      "description": "Shows a tag cloud built from the tags already used on whatever page it's placed on — category listings, topic pages, anywhere the community renders tag links. Click a tag to search the community for it.",
+      "version": "1.0.0",
+      "containers": ["Full width", "Sidebar"],
+      "widgetsLibrary": true,
+      "imageName": "tag_cloud",
+      "source": {
+        "path": "widgets/page_tag_cloud",
+        "entry": "index.html"
+      },
+      "settings": {
+        "configurable": true,
+        "editable": true,
+        "removable": true,
+        "shared": false,
+        "movable": true,
+        "container": false
+      },
+      "configuration": {
+        "properties": [
+          {
+            "name": "title",
+            "label": "Widget title",
+            "type": "text",
+            "defaultValue": "Tags on this page",
+            "description": "Heading shown above the tag cloud."
+          },
+          {
+            "name": "maxTags",
+            "label": "Max tags to show",
+            "type": "number",
+            "defaultValue": 30,
+            "rules": { "minimum": 1, "maximum": 200 },
+            "description": "Caps how many distinct tags are displayed, most-used first."
+          },
+          {
+            "name": "showCounts",
+            "label": "Show tag counts",
+            "type": "boolean",
+            "defaultValue": true,
+            "description": "Display how many times each tag appears alongside the tag."
+          }
+        ]
+      },
+      "defaultConfig": {
+        "title": "Tags on this page",
+        "maxTags": 30,
+        "showCounts": true
+      }
+    }
+  ],
+  "scripts": [],
+  "stylesheets": []
+}
