@@ -5,7 +5,7 @@
       "type": "onestream_page_tag_cloud",
       "category": "content discovery",
       "description": "Shows a tag cloud built from the tags used on whatever page it's placed on. On a topic/article page it reads the tags directly; on a feed or category listing page (where tags aren't shown per card) it follows the linked articles in the background and pulls their tags in too. Click a tag to search the community for it.",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "containers": ["Full width", "Sidebar"],
       "widgetsLibrary": true,
       "imageName": "tag_cloud",
