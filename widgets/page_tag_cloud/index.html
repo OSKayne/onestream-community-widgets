@@ -143,6 +143,10 @@
 
       for (const a of anchors) {
         if (links.length >= maxItemsToScan) break;
+        // Skip anything inside nav/header regions - mega-menus and
+        // sidebar category trees also use "-<id>" URLs and would
+        // otherwise swamp the scan before it reaches real articles.
+        if (a.closest('nav, header, [role="navigation"], [role="banner"], [role="menu"]')) continue;
         const href = a.getAttribute('href');
         if (!href) continue;
         let url;
