@@ -4,8 +4,8 @@
       "title": "Tags on This Page",
       "type": "onestream_page_tag_cloud",
       "category": "content discovery",
-      "description": "Shows a tag cloud built from the tags already used on whatever page it's placed on — category listings, topic pages, anywhere the community renders tag links. Click a tag to search the community for it.",
-      "version": "1.0.0",
+      "description": "Shows a tag cloud built from the tags used on whatever page it's placed on. On a topic/article page it reads the tags directly; on a feed or category listing page (where tags aren't shown per card) it follows the linked articles in the background and pulls their tags in too. Click a tag to search the community for it.",
+      "version": "1.1.0",
       "containers": ["Full width", "Sidebar"],
       "widgetsLibrary": true,
       "imageName": "tag_cloud",
@@ -44,13 +44,22 @@
             "type": "boolean",
             "defaultValue": true,
             "description": "Display how many times each tag appears alongside the tag."
+          },
+          {
+            "name": "maxItemsToScan",
+            "label": "Max linked items to scan (feed pages)",
+            "type": "number",
+            "defaultValue": 40,
+            "rules": { "minimum": 1, "maximum": 200 },
+            "description": "On a feed/listing page, caps how many linked articles are checked in the background for tags. Keeps large feeds fast. Has no effect on an individual topic page, since tags there are read directly with no extra fetching."
           }
         ]
       },
       "defaultConfig": {
         "title": "Tags on this page",
         "maxTags": 30,
-        "showCounts": true
+        "showCounts": true,
+        "maxItemsToScan": 40
       }
     }
   ],
