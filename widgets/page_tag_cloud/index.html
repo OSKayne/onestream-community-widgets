@@ -111,8 +111,8 @@
   const NAV_EXCLUDE_SELECTOR = 'nav, header, [role="navigation"], [role="banner"], [role="menu"]';
   const CURRENT_PAGE_KEY = '::current-page::';
   const CONNECTOR_PERMALINK = 'insided-search-api';
-  const SEARCH_API_PAGE_SIZE = 200;
-  const SEARCH_API_MAX_PAGES = 10; // safety cap: up to 2000 topics in a space
+  const SEARCH_API_PAGE_SIZE = 25; // Gainsight support: larger pages (up to 200 per spec) can 502 on big result sets
+  const SEARCH_API_MAX_PAGES = 80; // safety cap: up to 2000 topics in a space, same ceiling as before at the smaller page size
 
   function buildTagHref(label) {
     return '/search?' + encodeURIComponent('tags[0]') + '=' + encodeURIComponent(label);
@@ -167,21 +167,35 @@
 
     // ---------- Space-wide mode (Community Search API via Connector) ----------
 
+    async function fetchSearchPage(widgetServiceSdk, categoryId, page, pageSize) {
+      return widgetServiceSdk.connectors.execute({
+        permalink: CONNECTOR_PERMALINK,
+        method: 'GET',
+        queryParams: {
+          q: '',
+          categoryIds: [String(categoryId)],
+          page: String(page),
+          pageSize: String(pageSize)
+        }
+      });
+    }
+
     async function fetchSpaceTags(categoryId) {
       const widgetServiceSdk = new window.WidgetServiceSDK();
       const mentions = [];
 
       for (let page = 1; page <= SEARCH_API_MAX_PAGES; page++) {
-        const data = await widgetServiceSdk.connectors.execute({
-          permalink: CONNECTOR_PERMALINK,
-          method: 'GET',
-          queryParams: {
-            q: '',
-            categoryIds: [String(categoryId)],
-            page: String(page),
-            pageSize: String(SEARCH_API_PAGE_SIZE)
-          }
-        });
+        let data;
+        let pageSizeUsed = SEARCH_API_PAGE_SIZE;
+        try {
+          data = await fetchSearchPage(widgetServiceSdk, categoryId, page, pageSizeUsed);
+        } catch (e) {
+          // Large pages can 502 on big result sets (per Gainsight support) -
+          // retry this one page at a much smaller size before giving up.
+          console.warn('[Tags widget] Page ' + page + ' at pageSize ' + pageSizeUsed + ' failed, retrying smaller:', e && e.message);
+          pageSizeUsed = 10;
+          data = await fetchSearchPage(widgetServiceSdk, categoryId, page, pageSizeUsed);
+        }
 
         const results = (data && data.community) || [];
         results.forEach((item) => {
@@ -191,7 +205,7 @@
           });
         });
 
-        if (results.length < SEARCH_API_PAGE_SIZE) break;
+        if (results.length < pageSizeUsed) break;
       }
 
       return mentions;
