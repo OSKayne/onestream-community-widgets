@@ -111,7 +111,7 @@
   const NAV_EXCLUDE_SELECTOR = 'nav, header, [role="navigation"], [role="banner"], [role="menu"]';
   const CURRENT_PAGE_KEY = '::current-page::';
   const CONNECTOR_PERMALINK = 'insided-search-api';
-  const SEARCH_API_PAGE_SIZE = 25; // Gainsight support: larger pages (up to 200 per spec) can 502 on big result sets
+  const SEARCH_API_PAGE_SIZE = 50; // Gainsight support confirmed 200 can 502 on big result sets; 25 was confirmed safe. Trying 50 to halve round trips - any page that still 502s automatically retries smaller (see fetchSearchPageWithRetry), so this is safe to raise experimentally.
   const SEARCH_API_MAX_PAGES = 80; // safety cap: up to 2000 topics in a space, same ceiling as before at the smaller page size
   const BREADCRUMB_ITEM_SELECTOR = 'li.breadcrumb-item';
   const BREADCRUMB_SKIP_CLASSES = ['qa-breadcrumb-community', 'qa-breadcrumb-category']; // generic "Home" / "Community" root crumbs - not part of the space path
