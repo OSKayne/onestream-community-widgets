@@ -70,9 +70,7 @@
 <div class="otpc-wrap">
   <p class="otpc-title" id="otpc-title">Tags on this page</p>
   <p class="otpc-subtitle" id="otpc-subtitle" style="display:none"></p>
-  <div class="otpc-cloud" id="otpc-cloud">
-    <span class="otpc-empty">Loading tags&hellip;</span>
-  </div>
+  <div class="otpc-cloud" id="otpc-cloud"></div>
   <p class="otpc-scanning" id="otpc-scanning" style="display:none"></p>
 </div>
 
@@ -439,7 +437,7 @@
           spaceFetchAttempted = true;
           if (scanningEl) {
             scanningEl.style.display = 'block';
-            scanningEl.textContent = 'Loading tags for this space… this may take a moment for larger spaces.';
+            scanningEl.textContent = 'Loading tags for this space — this may take a moment for larger spaces.';
           }
           try {
             const spaceMentions = await fetchSpaceTags(categoryId);
