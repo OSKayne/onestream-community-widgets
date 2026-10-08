@@ -211,32 +211,56 @@
       });
     }
 
+    async function fetchSearchPageWithRetry(widgetServiceSdk, categoryId, page) {
+      let pageSizeUsed = SEARCH_API_PAGE_SIZE;
+      let data;
+      try {
+        data = await fetchSearchPage(widgetServiceSdk, categoryId, page, pageSizeUsed);
+      } catch (e) {
+        // Large pages can 502 on big result sets (per Gainsight support) -
+        // retry this one page at a much smaller size before giving up.
+        console.warn('[Tags widget] Page ' + page + ' at pageSize ' + pageSizeUsed + ' failed, retrying smaller:', e && e.message);
+        pageSizeUsed = 10;
+        data = await fetchSearchPage(widgetServiceSdk, categoryId, page, pageSizeUsed);
+      }
+      return { results: (data && data.community) || [], pageSizeUsed };
+    }
+
     async function fetchSpaceTags(categoryId) {
       const widgetServiceSdk = new window.WidgetServiceSDK();
       const mentions = [];
 
-      for (let page = 1; page <= SEARCH_API_MAX_PAGES; page++) {
-        let data;
-        let pageSizeUsed = SEARCH_API_PAGE_SIZE;
-        try {
-          data = await fetchSearchPage(widgetServiceSdk, categoryId, page, pageSizeUsed);
-        } catch (e) {
-          // Large pages can 502 on big result sets (per Gainsight support) -
-          // retry this one page at a much smaller size before giving up.
-          console.warn('[Tags widget] Page ' + page + ' at pageSize ' + pageSizeUsed + ' failed, retrying smaller:', e && e.message);
-          pageSizeUsed = 10;
-          data = await fetchSearchPage(widgetServiceSdk, categoryId, page, pageSizeUsed);
+      // The Search API doesn't return a total result count up front, so we
+      // can't know ahead of time how many pages a space has. Instead,
+      // fetch pages in small concurrent batches (same pattern as the
+      // page-mode crawl's BATCH_SIZE below) rather than one at a time -
+      // this cuts wall-clock time substantially on large spaces (e.g.
+      // ~1,300 topics was ~52 sequential round trips before). We stop once
+      // any page in a batch comes back short (the real end of results);
+      // any pages fetched past that in the same batch are just discarded.
+      const SPACE_FETCH_BATCH_SIZE = 6;
+      let nextPage = 1;
+      let reachedEnd = false;
+
+      while (!reachedEnd && nextPage <= SEARCH_API_MAX_PAGES) {
+        const batchPages = [];
+        for (let i = 0; i < SPACE_FETCH_BATCH_SIZE && nextPage <= SEARCH_API_MAX_PAGES; i++, nextPage++) {
+          batchPages.push(nextPage);
         }
 
-        const results = (data && data.community) || [];
-        results.forEach((item) => {
-          (item.tags || []).forEach((label) => {
-            if (!label) return;
-            mentions.push({ label, href: buildTagHref(label, categoryPath) });
-          });
-        });
+        const batchResults = await Promise.all(
+          batchPages.map((page) => fetchSearchPageWithRetry(widgetServiceSdk, categoryId, page))
+        );
 
-        if (results.length < pageSizeUsed) break;
+        batchResults.forEach(({ results, pageSizeUsed }) => {
+          results.forEach((item) => {
+            (item.tags || []).forEach((label) => {
+              if (!label) return;
+              mentions.push({ label, href: buildTagHref(label, categoryPath) });
+            });
+          });
+          if (results.length < pageSizeUsed) reachedEnd = true;
+        });
       }
 
       return mentions;
