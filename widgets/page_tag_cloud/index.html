@@ -111,7 +111,7 @@
   const NAV_EXCLUDE_SELECTOR = 'nav, header, [role="navigation"], [role="banner"], [role="menu"]';
   const CURRENT_PAGE_KEY = '::current-page::';
   const CONNECTOR_PERMALINK = 'insided-search-api';
-  const SEARCH_API_PAGE_SIZE = 50; // Gainsight support confirmed 200 can 502 on big result sets; 25 was confirmed safe. Trying 50 to halve round trips - any page that still 502s automatically retries smaller (see fetchSearchPageWithRetry), so this is safe to raise experimentally.
+  const SEARCH_API_PAGE_SIZE = 100; // Gainsight support confirmed 200 can 502 on big result sets; 25 and 50 both confirmed safe. Trying 100 to cut round trips further - any page that still 502s automatically retries smaller (see fetchSearchPageWithRetry), so this is safe to raise experimentally.
   const SEARCH_API_MAX_PAGES = 80; // safety cap: up to 2000 topics in a space, same ceiling as before at the smaller page size
   const BREADCRUMB_ITEM_SELECTOR = 'li.breadcrumb-item';
   const BREADCRUMB_SKIP_CLASSES = ['qa-breadcrumb-community', 'qa-breadcrumb-category']; // generic "Home" / "Community" root crumbs - not part of the space path
@@ -238,7 +238,7 @@
       // ~1,300 topics was ~52 sequential round trips before). We stop once
       // any page in a batch comes back short (the real end of results);
       // any pages fetched past that in the same batch are just discarded.
-      const SPACE_FETCH_BATCH_SIZE = 6;
+      const SPACE_FETCH_BATCH_SIZE = 10;
       let nextPage = 1;
       let reachedEnd = false;
 
@@ -439,7 +439,7 @@
           spaceFetchAttempted = true;
           if (scanningEl) {
             scanningEl.style.display = 'block';
-            scanningEl.textContent = 'Loading tags for this space…';
+            scanningEl.textContent = 'Loading tags for this space… this may take a moment for larger spaces.';
           }
           try {
             const spaceMentions = await fetchSpaceTags(categoryId);
