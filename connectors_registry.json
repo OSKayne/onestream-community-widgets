@@ -29,7 +29,7 @@
         },
         {
           "key": "pageSize",
-          "value": "200",
+          "value": "25",
           "overridable": true
         }
       ],
