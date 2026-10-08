@@ -5,7 +5,7 @@
       "type": "onestream_page_tag_cloud",
       "category": "content discovery",
       "description": "Shows a tag cloud for the space the current page belongs to, using the Community Search API when available (accurate, covers every topic in the space). Falls back to reading tags directly off the page, plus linked articles, if the API is not configured or the page is not inside a recognizable space. Click a tag to search the community for it, pre-filtered to this space.",
-      "version": "1.5.1",
+      "version": "1.6.0",
       "containers": ["Full width", "Sidebar"],
       "widgetsLibrary": true,
       "imageName": "tag_cloud",
