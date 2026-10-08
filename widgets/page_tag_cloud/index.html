@@ -166,6 +166,7 @@
     let crawlInFlight = false;
     let mode = null; // 'space' | 'page'
     let spaceFetchAttempted = false;
+    let spaceFailed = false;
     let categoryPath = null; // human-readable space path for the "category" search filter, read from the breadcrumb
 
     // Persistent, additive state for fallback (page) mode: one entry per
@@ -400,30 +401,41 @@
       const categoryId = extractCategoryIdFromPath();
       if (categoryPath === null) categoryPath = extractCategoryBreadcrumb();
 
-      if (categoryId !== null && !spaceFetchAttempted) {
-        spaceFetchAttempted = true;
-        if (scanningEl) {
-          scanningEl.style.display = 'block';
-          scanningEl.textContent = 'Loading tags for this space…';
+      if (categoryId !== null && !spaceFailed) {
+        if (!spaceFetchAttempted) {
+          // Only the render() call that wins this race actually kicks off
+          // the fetch. The space-wide lookup can take several seconds
+          // (many small pages, per Gainsight support's 502 workaround), and
+          // the MutationObserver fires further render() calls in the
+          // meantime as the page's own content streams in. Without this
+          // guard, those re-entrant calls would fall through to the quick
+          // DOM-scrape (page mode) and paint it, which would then get
+          // overwritten once the real space-wide result finally lands -
+          // a confusing flash of wrong/partial tags before the real ones.
+          spaceFetchAttempted = true;
+          if (scanningEl) {
+            scanningEl.style.display = 'block';
+            scanningEl.textContent = 'Loading tags for this space…';
+          }
+          try {
+            const spaceMentions = await fetchSpaceTags(categoryId);
+            mode = 'space';
+            if (scanningEl) scanningEl.style.display = 'none';
+            paint(spaceMentions);
+          } catch (e) {
+            console.warn('[Tags widget] Space-wide lookup failed, falling back to page mode:', e && e.message);
+            spaceFailed = true;
+            if (scanningEl) scanningEl.style.display = 'none';
+          }
         }
-        try {
-          const spaceMentions = await fetchSpaceTags(categoryId);
-          mode = 'space';
-          if (scanningEl) scanningEl.style.display = 'none';
-          paint(spaceMentions);
-          return; // space mode succeeded - no need for page-mode crawling
-        } catch (e) {
-          console.warn('[Tags widget] Space-wide lookup failed, falling back to page mode:', e && e.message);
-          if (scanningEl) scanningEl.style.display = 'none';
-          // fall through to page mode below
-        }
-      }
 
-      if (mode === 'space') {
-        // Space mode already succeeded earlier - nothing more to do on
-        // subsequent re-scans (the space's tag set doesn't change just
-        // because the DOM mutated).
-        return;
+        if (!spaceFailed) {
+          // Either space mode already succeeded, or another render() call
+          // has the fetch in flight right now - either way, don't run
+          // page mode while we have (or are waiting on) the authoritative
+          // space-wide result.
+          return;
+        }
       }
 
       await renderPageMode();
