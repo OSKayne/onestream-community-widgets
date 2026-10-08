@@ -113,15 +113,44 @@
   const CONNECTOR_PERMALINK = 'insided-search-api';
   const SEARCH_API_PAGE_SIZE = 25; // Gainsight support: larger pages (up to 200 per spec) can 502 on big result sets
   const SEARCH_API_MAX_PAGES = 80; // safety cap: up to 2000 topics in a space, same ceiling as before at the smaller page size
+  const BREADCRUMB_ITEM_SELECTOR = 'li.breadcrumb-item';
+  const BREADCRUMB_SKIP_CLASSES = ['qa-breadcrumb-community', 'qa-breadcrumb-category']; // generic "Home" / "Community" root crumbs - not part of the space path
 
-  function buildTagHref(label) {
-    return '/search?' + encodeURIComponent('tags[0]') + '=' + encodeURIComponent(label);
+  function buildTagHref(label, categoryPath) {
+    let href = '/search?' + encodeURIComponent('tags[0]') + '=' + encodeURIComponent(label);
+    if (categoryPath) {
+      href += '&category=' + encodeURIComponent(categoryPath);
+    }
+    return href;
   }
 
   function extractCategoryIdFromPath() {
     const firstSegment = window.location.pathname.split('/').filter(Boolean)[0] || '';
     const m = firstSegment.match(/-(\d+)$/);
     return m ? parseInt(m[1], 10) : null;
+  }
+
+  // Reads the page's own breadcrumb nav (e.g. Home > Community > Welcome >
+  // News) and returns everything after the generic "Home"/"Community" root
+  // crumbs, joined as "Welcome > News" - this matches the "category" query
+  // parameter the community's own search page uses for a space filter, as
+  // confirmed by clicking a tag with a space filter applied and inspecting
+  // the resulting URL. DOM-based (not ID-based) since the category filter
+  // is the space's display name path, not a numeric ID.
+  function extractCategoryBreadcrumb() {
+    const items = Array.from(document.querySelectorAll(BREADCRUMB_ITEM_SELECTOR));
+    if (!items.length) return null;
+
+    const parts = [];
+    items.forEach((li) => {
+      if (BREADCRUMB_SKIP_CLASSES.some((c) => li.classList.contains(c))) return;
+      const clone = li.cloneNode(true);
+      clone.querySelectorAll('i').forEach((icon) => icon.remove());
+      const text = (clone.textContent || '').trim();
+      if (text) parts.push(text);
+    });
+
+    return parts.length ? parts.join(' > ') : null;
   }
 
   export default async function init(sdk) {
@@ -137,6 +166,7 @@
     let crawlInFlight = false;
     let mode = null; // 'space' | 'page'
     let spaceFetchAttempted = false;
+    let categoryPath = null; // human-readable space path for the "category" search filter, read from the breadcrumb
 
     // Persistent, additive state for fallback (page) mode: one entry per
     // source (current page, or a fetched article URL). Re-scans only
@@ -201,7 +231,7 @@
         results.forEach((item) => {
           (item.tags || []).forEach((label) => {
             if (!label) return;
-            mentions.push({ label, href: buildTagHref(label) });
+            mentions.push({ label, href: buildTagHref(label, categoryPath) });
           });
         });
 
@@ -310,7 +340,7 @@
 
         const link = document.createElement('a');
         link.className = 'otpc-tag otpc-size-' + sizeTier;
-        link.href = tag.href || buildTagHref(tag.label);
+        link.href = tag.href || buildTagHref(tag.label, categoryPath);
         link.textContent = tag.label;
 
         if (config.showCounts) {
@@ -368,6 +398,7 @@
 
     async function render() {
       const categoryId = extractCategoryIdFromPath();
+      if (categoryPath === null) categoryPath = extractCategoryBreadcrumb();
 
       if (categoryId !== null && !spaceFetchAttempted) {
         spaceFetchAttempted = true;
